@@ -10,3 +10,10 @@ body {
     font-size: .875rem;
     color: #6c757d;
 }
+#status {
+    margin-top: .5em;
+    font-size: .875rem;
+}
+#status.error {
+    color: #dc3545;
+}

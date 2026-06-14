@@ -3,10 +3,9 @@ const MAIN_CONTENT_ID = "main-content";
 let tab = null;
 let lastHref = location.href;
 
-chrome.runtime.sendMessage({ type: "whoAmI" })
-  .then(tabId => {
-    tab = tabId.tab;
-  });
+chrome.runtime.sendMessage({ type: "whoAmI" }).then((tabId) => {
+  tab = tabId.tab;
+});
 
 const extractPatreonData = () => {
   console.log("Patreon Downloader | Attempting to extract Patreon data from page.");
@@ -17,15 +16,19 @@ const extractPatreonData = () => {
 
   function fetchDataFromPage() {
     try {
-      const data = window.__NEXT_DATA__ ?? JSON.parse(document.getElementById("__NEXT_DATA__")?.innerText);
-      console.log("Patreon Downloader | Could not extract data from API, falling back to embedded data.");
+      // Content scripts run in an isolated world, so the page's __NEXT_DATA__ global
+      // is unreachable; read the serialized copy from the DOM instead.
+      const data = JSON.parse(document.getElementById("__NEXT_DATA__")?.innerText);
+      console.log("Patreon Downloader | Extracting Patreon data from embedded page data.");
       const detail = data?.props?.pageProps?.bootstrapEnvelope?.pageBootstrap?.post;
-      document.dispatchEvent(new CustomEvent("pd-bootstrap-data", {
-        detail: {
-          pageURL: window.location.href,
-          ...detail,
-        }
-      }));
+      document.dispatchEvent(
+        new CustomEvent("pd-bootstrap-data", {
+          detail: {
+            pageURL: window.location.href,
+            ...detail,
+          },
+        }),
+      );
     } catch (e) {
       console.error("Patreon Downloader | Failed to extract Patreon data from page.", e);
       document.dispatchEvent(new CustomEvent("pd-bootstrap-data", { detail: undefined }));
@@ -33,40 +36,45 @@ const extractPatreonData = () => {
   }
 
   if (campaignIdMatch?.length > 1 && postIdMatch?.length > 1) {
-    const campaignId = campaignIdMatch[1];
     const postId = postIdMatch[1];
     const fetchOptions = {
       method: "GET",
       credentials: "include",
       redirect: "follow",
       headers: {
-        "Content-Type": "application/json"
-      }
+        "Content-Type": "application/json",
+      },
     };
     const params = new URLSearchParams({
-      "fields[post]": "content,embed,image,post_metadata,title,video",
+      "fields[post]": "content_json_string,embed,image,post_metadata,published_at,title,url",
       "fields[post_tag]": "tag_type,value",
       "fields[media]": "id,image_urls,display,download_url,metadata,file_name",
-      "filter[campaign_id]": campaignId,
-      "include": "images,attachment,media,attachments_media,campaign",
+      include: "images,attachment,media,attachments_media,campaign",
       "json-api-version": "1.0",
-      "json-api-use-default-includes": "true"
+      "json-api-use-default-includes": "true",
     });
 
     const apiUrl = `https://www.patreon.com/api/posts/${postId}?${params}`;
 
     fetch(apiUrl, fetchOptions)
-      .then(response => response.json())
-      .then(data => {
-        console.log("Patreon Downloader | Fetched Patreon bootstrap data from API.", data);
-        document.dispatchEvent(new CustomEvent("pd-bootstrap-data", {
-          detail: {
-            pageURL: window.location.href,
-            ...data,
-          }
-        }));
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`API responded with ${response.status}`);
+        }
+        return response.json();
       })
-      .catch(error => {
+      .then((data) => {
+        console.log("Patreon Downloader | Fetched Patreon bootstrap data from API.", data);
+        document.dispatchEvent(
+          new CustomEvent("pd-bootstrap-data", {
+            detail: {
+              pageURL: window.location.href,
+              ...data,
+            },
+          }),
+        );
+      })
+      .catch((error) => {
         console.error("Error fetching Patreon data from API:", error);
         fetchDataFromPage();
       });
@@ -81,7 +89,6 @@ const handleMaybeRouteChange = () => {
   lastHref = href;
   extractPatreonData();
 };
-
 
 const installListener = () => {
   if (globalThis["__pdMainContentWatcherInstalled"]) return;
@@ -117,7 +124,8 @@ const installListener = () => {
       const el = /** @type {Element} */ (node);
 
       if (el.id === MAIN_CONTENT_ID) return true;
-      if (typeof el.querySelector === "function" && el.querySelector(`#${MAIN_CONTENT_ID}`)) return true;
+      if (typeof el.querySelector === "function" && el.querySelector(`#${MAIN_CONTENT_ID}`))
+        return true;
     }
     return false;
   };
@@ -138,7 +146,7 @@ const installListener = () => {
     if (!document.body) return;
     observer.observe(document.body, {
       childList: true,
-      subtree: true
+      subtree: true,
     });
   };
 
@@ -181,9 +189,14 @@ function setState(state, iteration) {
   try {
     const data = {};
     data[tab.toString()] = state;
-    chrome.storage.local.set(data, function() {
+    chrome.storage.local.set(data, function () {
       if (chrome.runtime.lastError) {
-        console.error("Patreon Downloader | Failed to set data for tab.", tab, data, chrome.runtime.lastError.message);
+        console.error(
+          "Patreon Downloader | Failed to set data for tab.",
+          tab,
+          data,
+          chrome.runtime.lastError.message,
+        );
       } else {
         console.log("Patreon Downloader | Set page data.", tab, data);
       }
@@ -193,17 +206,15 @@ function setState(state, iteration) {
   }
 }
 
-chrome.runtime.onMessage.addListener(
-  function(msg, sender, sendResponse) {
-    if (msg.type === "download") {
-      doDownload(msg.requests, msg.zipName);
-    } else {
-      console.log(...msg);
-    }
-    sendResponse();
-    return true;
+chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+  if (msg.type === "download") {
+    doDownload(msg.requests, msg.zipName);
+  } else {
+    console.log(...msg);
   }
-);
+  sendResponse();
+  return true;
+});
 
 function doDownload(requests, filename) {
   const dataZip = new Compressor(filename);
@@ -219,11 +230,6 @@ function doDownload(requests, filename) {
    */
   let processed = 0;
   /**
-   * Total file size downloaded so far. For calculating overall average download speed.
-   * @type {number}
-   */
-  let totalLoaded = 0;
-  /**
    * The current speed of downloads. For calculating a smoother download speed.
    * @type {null|number}
    * @see {@link https://stackoverflow.com/a/18637230/191306}
@@ -235,20 +241,26 @@ function doDownload(requests, filename) {
    */
   const TIME_CONSTANT = 5;
   const fileDetails = {};
+  /**
+   * The number of downloads that failed and were skipped.
+   * @type {number}
+   */
+  let failed = 0;
 
   const downloader = new Downloader({
+    onError: (data) => {
+      failed++;
+      console.error("Patreon Downloader | Failed to download.", data.url, data.error);
+    },
     onDownloaded: (data) => {
-      totalLoaded += data.blob.size || 0;
-      dataZip
-        .AddBlobToZip(data.blob, decodeURIComponent(fileDetails[data.url]))
-        .then(() => {
-          processed++;
-          chrome.runtime.sendMessage({
-            type: "downloadUpdate",
-            count: processed,
-            total
-          });
+      dataZip.AddBlobToZip(data.blob, decodeURIComponent(fileDetails[data.url])).then(() => {
+        processed++;
+        chrome.runtime.sendMessage({
+          type: "downloadUpdate",
+          count: processed,
+          total,
         });
+      });
     },
     onProgress: (data) => {
       if (data.complete) {
@@ -261,9 +273,9 @@ function doDownload(requests, filename) {
       }
       chrome.runtime.sendMessage({
         type: "downloadUpdate",
-        speed
+        speed,
       });
-    }
+    },
   });
 
   if (requests?.length) {
@@ -271,16 +283,16 @@ function doDownload(requests, filename) {
     for (const request of requests) {
       fileDetails[request.url] = request.filename;
     }
-    downloader.AddURLs(requests.map(r => r.url));
-    downloader.Process()
-      .then(() => {
-        dataZip.Complete();
-        chrome.runtime.sendMessage({
-          type: "downloadComplete",
-          filename
-        });
-        console.log("Patreon Downloader | Triggering download", requests);
-        dataZip.Download();
+    downloader.AddURLs(requests.map((r) => r.url));
+    downloader.Process().then(() => {
+      dataZip.Complete();
+      chrome.runtime.sendMessage({
+        type: "downloadComplete",
+        filename,
+        failed,
       });
+      console.log("Patreon Downloader | Triggering download", requests);
+      dataZip.Download();
+    });
   }
 }
