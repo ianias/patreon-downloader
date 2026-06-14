@@ -8,9 +8,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - name: Zip Release
-        uses: TheDoctor0/zip-release@0.4.1
+        uses: TheDoctor0/zip-release@0.7.6
         with:
           filename: 'patreon-downloader-${{github.event.release.tag_name}}.zip'
           exclusions: '*.git*'

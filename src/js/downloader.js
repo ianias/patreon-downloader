@@ -1,13 +1,16 @@
+/* exported Downloader */
 class Downloader {
   /**
    * @param {number} concurrency - The number of concurrent downloads to process
    * @param {function(ProgressDownloaded): void} onDownloaded - A function to call each time a download completes.
    * @param {function(ProgressUpdate): void} onProgress - A function to call with progress updates.
+   * @param {function(DownloadError): void} onError - A function to call when a download fails.
    */
   constructor({
     concurrency = 5,
     onDownloaded = () => {},
     onProgress = () => {},
+    onError = () => {},
   } = {}) {
     this.urls = [];
     this.running = 0;
@@ -25,7 +28,18 @@ class Downloader {
      * @type {function(ProgressUpdate): void}
      */
     this.onProgress = onProgress;
+    /**
+     * The function to call when a download fails.
+     * @type {function(DownloadError): void}
+     */
+    this.onError = onError;
   }
+
+  /**
+   * @typedef DownloadError
+   * @property {string} url - The URL that failed to download.
+   * @property {*} error - The error that caused the failure.
+   */
 
   /**
    * @typedef ProgressDownloaded
@@ -65,11 +79,19 @@ class Downloader {
 
       const resolveAsset = async (iterator) => {
         for (let [, url] of iterator) {
-          const blob = await this._download(url);
-          if (blob) {
-            this.onDownloaded({
+          // Keep the worker alive on failure so the remaining URLs still download.
+          try {
+            const blob = await this._download(url);
+            if (blob) {
+              this.onDownloaded({
+                url,
+                blob,
+              });
+            }
+          } catch (error) {
+            this.onError({
               url,
-              blob,
+              error,
             });
           }
         }
@@ -97,12 +119,12 @@ class Downloader {
     return new Promise((resolve, reject) => {
       const oReq = new XMLHttpRequest();
       // TODO set a timeout based on config setting
-      oReq.responseType = 'blob';
+      oReq.responseType = "blob";
 
       let speed = null;
       let previousLoaded = 0;
       const TIME_CONSTANT = 5;
-      oReq.addEventListener('progress', (e) => {
+      oReq.addEventListener("progress", (e) => {
         let percentComplete = 0;
         // Only able to compute progress information if the total size is known
         if (e.lengthComputable && e.total) {
@@ -122,7 +144,7 @@ class Downloader {
           complete: false,
         });
       });
-      oReq.addEventListener('load', () => {
+      oReq.addEventListener("load", () => {
         this.onProgress({
           url,
           percentComplete: 100,
@@ -131,13 +153,13 @@ class Downloader {
         });
         resolve(oReq.response);
       });
-      oReq.addEventListener('error', (e) => {
+      oReq.addEventListener("error", (e) => {
         reject(e);
       });
-      oReq.addEventListener('abort', (e) => {
+      oReq.addEventListener("abort", (e) => {
         reject(e);
       });
-      oReq.open('GET', url);
+      oReq.open("GET", url);
       oReq.send();
     });
   }

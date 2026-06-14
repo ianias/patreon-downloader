@@ -6,21 +6,34 @@ const notPatreonSite = document.getElementById("not-patreon-site");
 const patreonSite = document.getElementById("patreon-site");
 const zipNameInput = document.getElementById("zip-name");
 const downloadForm = document.getElementById("download");
+const statusEl = document.getElementById("status");
 
 let files = [];
 
 includeAvatar?.addEventListener("change", updateDownloadCount);
 includeDescription?.addEventListener("change", updateDownloadCount);
 
-chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
+function setStatus(message, isError = false) {
+  if (!statusEl) return;
+  statusEl.textContent = message;
+  statusEl.classList.toggle("error", isError);
+  statusEl.hidden = !message;
+}
+
+chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
   switch (message.type) {
     case "downloadUpdate":
       if (message.speed) {
-        if (downloadSpeed) downloadSpeed.textContent = `Downloading: ${HumanFileSize(message.speed)}/s`;
+        if (downloadSpeed)
+          downloadSpeed.textContent = `Downloading: ${HumanFileSize(message.speed)}/s`;
       }
       break;
     case "downloadComplete":
-      if (downloadSpeed) downloadSpeed.textContent = "Complete!";
+      if (downloadSpeed) {
+        downloadSpeed.textContent = message.failed
+          ? `Complete — ${message.failed} file(s) could not be downloaded.`
+          : "Complete!";
+      }
       break;
   }
   sendResponse();
@@ -31,7 +44,7 @@ function isPatreonPostSite() {
   return chrome.tabs.query(
     {
       active: true,
-      lastFocusedWindow: true
+      lastFocusedWindow: true,
     },
     (tabs) => {
       const tabId = tabs[0]?.id?.toString();
@@ -40,7 +53,7 @@ function isPatreonPostSite() {
       notPatreonSite.hidden = true;
       patreonSite.hidden = false;
       parsePatreonData(tabId);
-    }
+    },
   );
 }
 
@@ -59,17 +72,17 @@ function updateDownloadCount() {
     chrome.tabs.query(
       {
         active: true,
-        currentWindow: true
+        currentWindow: true,
       },
-      function(tabs) {
+      function (tabs) {
         chrome.tabs.sendMessage(tabs[0].id, ["Patreon Downloader | Files", files]);
-      }
+      },
     );
   }
 }
 
 function parsePatreonData(tabId) {
-  chrome.storage.local.get(tabId, function(contentData) {
+  chrome.storage.local.get(tabId, function (contentData) {
     if (!contentData || !contentData[tabId]) {
       notPatreonSite.hidden = false;
       patreonSite.hidden = true;
@@ -82,6 +95,7 @@ function parsePatreonData(tabId) {
 
     if (!contentData?.data?.attributes) {
       console.error("Patreon Downloader | Invalid post data found.");
+      setStatus("Couldn't read this Patreon post. Try reloading the page.", true);
       return;
     }
 
@@ -131,20 +145,13 @@ function parsePatreonData(tabId) {
           } catch (e) {
             console.error(`Patreon Downloader | Error parsing URL ${out.url}`, e);
             console.warn(
-              `Patreon Downloader | Using ID ${o.id}.jpg as filename. This may not be correct and you may have to manually rename the file extension.`
+              `Patreon Downloader | Using ID ${o.id}.jpg as filename. This may not be correct and you may have to manually rename the file extension.`,
             );
             out.filename = `${o.id}.jpg`;
           }
         }
 
-        if (seenFiles.has(out.filename)) {
-          const uniqueSuffix = out.id || Math.floor(Math.random() * 1e9);
-          const dotIndex = out.filename.lastIndexOf(".");
-          const baseName = dotIndex > 0 ? out.filename.slice(0, dotIndex) : out.filename;
-          const extension = dotIndex > 0 ? out.filename.slice(dotIndex) : "";
-          out.filename = `${baseName}-${uniqueSuffix}${extension}`;
-        }
-        seenFiles.add(out.filename);
+        out.filename = makeUniqueFilename(out.filename, seenFiles, o.id);
 
         return out;
       });
@@ -154,24 +161,14 @@ function parsePatreonData(tabId) {
 
       let filename = "image";
       try {
-        filename = new URL(imageUrl).pathname.split("/")
-          .pop() || filename;
+        filename = new URL(imageUrl).pathname.split("/").pop() || filename;
       } catch {
         // Fall back to default filename if the URL cannot be parsed
       }
 
-      if (seenFiles.has(filename)) {
-        const uniqueSuffix = contentData.data.id || Math.floor(Math.random() * 1e9);
-        const dotIndex = filename.lastIndexOf(".");
-        const baseName = dotIndex > 0 ? filename.slice(0, dotIndex) : filename;
-        const extension = dotIndex > 0 ? filename.slice(dotIndex) : "";
-        filename = `${baseName}-${uniqueSuffix}${extension}`;
-      }
-      seenFiles.add(filename);
-
       files.push({
-        filename,
-        url: imageUrl
+        filename: makeUniqueFilename(filename, seenFiles, contentData.data.id),
+        url: imageUrl,
       });
     }
 
@@ -179,7 +176,7 @@ function parsePatreonData(tabId) {
       let filename = "embed.txt";
       files.push({
         filename,
-        url: contentData.data.attributes.embed_url
+        url: contentData.data.attributes.embed_url,
       });
     }
 
@@ -201,10 +198,12 @@ function parsePatreonData(tabId) {
       const requests = [];
 
       if (includeDescription?.checked) {
-        let content = [`<h1 id="title">${contentData.data.attributes?.title}</h1>`];
+        let content = [`<h1 id="title">${escapeHtml(contentData.data.attributes?.title)}</h1>`];
 
         if (postUser.name && postUser.url) {
-          content.push(`<p>by <a href="${postUser.url}">${postUser.name}</a></p>`);
+          content.push(
+            `<p>by <a href="${escapeHtml(postUser.url)}">${escapeHtml(postUser.name)}</a></p>`,
+          );
         }
 
         const tags = contentData.included
@@ -212,24 +211,28 @@ function parsePatreonData(tabId) {
           .map((included) => included.attributes.value);
 
         if (contentData.data?.attributes?.published_at) {
-          content.push(`<p id="published-at">${contentData.data.attributes.published_at}</p>`);
+          content.push(
+            `<p id="published-at">${escapeHtml(formatLocalDateTime(contentData.data.attributes.published_at))}</p>`,
+          );
         }
-        if (contentData.data?.attributes?.content) {
-          content.push(`<p id="content">${contentData.data.attributes.content}</p>`);
+        // Patreon delivers the post body as a `content_json_string` (TipTap/ProseMirror)
+        // document; the legacy rendered `content` HTML field is always null now.
+        if (contentData.data?.attributes?.content_json_string) {
+          content.push(
+            `<div id="content">${contentJsonToHtml(contentData.data.attributes.content_json_string)}</div>`,
+          );
         }
         if (tags?.length) {
           content.push(
-            `<p id="tags">${tags.map((tag) => `<span class="tag">${tag}</span>`)
-              .join(" | ")}</p>`
+            `<p id="tags">${tags
+              .map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`)
+              .join(" | ")}</p>`,
           );
         }
-        if (contentData.data?.attributes?.url) {
+        const postUrl = contentData.data?.attributes?.url || contentData.pageURL;
+        if (postUrl) {
           content.push(
-            `<p id="url"><a href="${contentData.data.attributes.url}">${contentData.data.attributes.url}</a></p>`
-          );
-        } else if (contentData.pageURL) {
-          content.push(
-            `<p id="url"><a href="${contentData.pageURL}">${contentData.pageURL}</a></p>`
+            `<p id="url"><a href="${escapeHtml(postUrl)}">${escapeHtml(postUrl)}</a></p>`,
           );
         }
 
@@ -238,7 +241,7 @@ function parsePatreonData(tabId) {
         const filename = "description.html";
         requests.push({
           url,
-          filename
+          filename,
         });
       }
 
@@ -249,7 +252,7 @@ function parsePatreonData(tabId) {
 
         requests.push({
           filename: `avatar.${extension}`,
-          url: postUser.avatarUrl
+          url: postUser.avatarUrl,
         });
       }
 
@@ -261,12 +264,12 @@ function parsePatreonData(tabId) {
             // Handle full urls as the filename, pull the final segment out
             const url = new URL(filename);
             filename = url.pathname.split(/[\\/]/).pop();
-          } catch (e) {
+          } catch {
             // Try parsing the url as the filename
             try {
               const url = new URL(files[i].url);
               filename = url.pathname.split(/[\\/]/).pop();
-            } catch (e) {
+            } catch {
               // Carry on with the standard filename
             }
           }
@@ -274,7 +277,7 @@ function parsePatreonData(tabId) {
 
         requests.push({
           filename,
-          url: files[i].url
+          url: files[i].url,
         });
       }
 
@@ -287,81 +290,27 @@ function parsePatreonData(tabId) {
         return true;
       });
 
-      chrome.tabs.query({
-        active: true,
-        currentWindow: true
-      }, function(tabs) {
-        let zipName = zipNameInput?.value || "archive.zip";
-        if (!zipName.endsWith(".zip")) zipName += ".zip";
+      chrome.tabs.query(
+        {
+          active: true,
+          currentWindow: true,
+        },
+        function (tabs) {
+          let zipName = zipNameInput?.value || "archive.zip";
+          if (!zipName.endsWith(".zip")) zipName += ".zip";
 
-        chrome.tabs.sendMessage(tabs[0].id, {
-          type: "download",
-          requests: filteredRequests,
-          zipName
-        });
-      });
+          chrome.tabs.sendMessage(tabs[0].id, {
+            type: "download",
+            requests: filteredRequests,
+            zipName,
+          });
+        },
+      );
     });
   });
 }
 
-/**
- * Format bytes as human-readable text.
- * @see https://stackoverflow.com/a/14919494/191306
- * @param bytes Number of bytes.
- * @param si True to use metric (SI) units, aka powers of 1000. False to use
- *           binary (IEC), aka powers of 1024.
- * @param dp Number of decimal places to display.
- * @return {string} Formatted string.
- */
-function HumanFileSize(bytes, si = true, dp = 1) {
-  const thresh = si ? 1000 : 1024;
-
-  if (Math.abs(bytes) < thresh) {
-    return `${bytes} B`;
-  }
-
-  const units = si
-    ? ["kB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"]
-    : ["KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB"];
-  let u = -1;
-  const r = 10 ** dp;
-
-  do {
-    bytes /= thresh;
-    ++u;
-  } while (
-    Math.round(Math.abs(bytes) * r) / r >= thresh &&
-    u < units.length - 1
-    );
-
-  return `${bytes.toFixed(dp)} ${units[u]}`;
-}
-
-function slugify(text) {
-  const illegalRe = /[\/?<>\\:*|"]/g;
-  const controlRe = /[\x00-\x1f\x80-\x9f]/g;
-  const reservedRe = /^\.+$/;
-  const windowsReservedRe = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i;
-  const windowsTrailingRe = /[. ]+$/;
-  const dashLikeRe = /[\u2010\u2011\u2012\u2013\u2014\u2015\u2212\uFE58\uFE63\uFF0D]/g; // normalize common unicode dashes to "-"
-
-  return text.toString()
-    .trim()
-    .replace(dashLikeRe, "-")
-    .replace(/\s+/g, "-")   // replace spaces with -
-    .replace(/&/g, "-and-") // replace & with 'and'
-    .replace(/--+/g, "-")   // replace multiple '-' with single '-'
-    .replace(/^-+/, "")     // Trim - from start of text
-    .replace(/-+$/, "")     // Trim - from end of text
-    .replace(/\.+$/, "")     // Trim . from end of text
-    .replace(illegalRe, "")
-    .replace(controlRe, "")
-    .replace(reservedRe, "")
-    .replace(windowsReservedRe, "")
-    .replace(windowsTrailingRe, "");
-}
-
-(function() {
+(function () {
   try {
     if (document.readyState === "loading") {
       document.addEventListener("DOMContentLoaded", isPatreonPostSite);

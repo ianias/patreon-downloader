@@ -1,3 +1,4 @@
+/* exported Compressor */
 class Compressor {
   /**
    * The filename to give the Zip file
@@ -28,29 +29,20 @@ class Compressor {
   }
 
   /**
-   * The filesize to switch between syncronous and asyncronous compression. ~490KB
-   * @type {number}
-   */
-  static LargeFileSize = 500000;
-
-  /**
    * Add a file to the zip.
    * @param {File} file - The file to be added. See [File]{@link https://developer.mozilla.org/en-US/docs/Web/API/File}
    * @param {string} filename - The filename to use. Use forward slashes for subdirectories. Will use the filename from the provided File as a fallback.
    */
-  async AddFileToZip(file, filename = '') {
+  async AddFileToZip(file, filename = "") {
     if (this.closed) {
       throw new Error(
-        `Cannot add to ${this.filename} as it has been completed. Ensure .Complete() is not called first.`
+        `Cannot add to ${this.filename} as it has been completed. Ensure .Complete() is not called first.`,
       );
     }
 
     const fname = filename.trim() || file.webkitRelativePath || file.name;
-    const ext = fname.slice(fname.lastIndexOf('.') + 1);
-    const zippedFileStream = Compressor.IncompressibleTypes.has(ext)
+    const zippedFileStream = Compressor.shouldStoreUncompressed(fname)
       ? new ZipPassThrough(filename)
-      : file.size > Compressor.LargeFileSize
-      ? new AsyncZipDeflate(filename, { level: 9 })
       : new ZipDeflate(filename, { level: 9 });
     zippedFileStream.mtime = file.lastModified;
     zippedFileStream.filename = fname;
@@ -75,16 +67,14 @@ class Compressor {
   async AddFileURLToZip(url, filename = url) {
     if (this.closed) {
       throw new Error(
-        `Cannot add to ${this.filename} as it has been completed. Ensure .Complete() is not called first.`
+        `Cannot add to ${this.filename} as it has been completed. Ensure .Complete() is not called first.`,
       );
     }
 
     try {
       let file = await fetch(url)
         .then((r) => r.blob())
-        .then(
-          (blobFile) => new File([blobFile], filename, { type: blobFile.type })
-        );
+        .then((blobFile) => new File([blobFile], filename, { type: blobFile.type }));
       await this.AddFileToZip(file, filename);
     } catch (e) {
       console.error(`Error adding file URL to zip ${this.filename}`, e);
@@ -109,14 +99,11 @@ class Compressor {
   AddStringToZip(data, filename) {
     if (this.closed) {
       throw new Error(
-        `Cannot add to ${this.filename} as it has been completed. Ensure .Complete() is not called first.`
+        `Cannot add to ${this.filename} as it has been completed. Ensure .Complete() is not called first.`,
       );
     }
 
-    const zippedStream =
-      data.length > Compressor.LargeFileSize
-        ? new AsyncZipDeflate(filename, { level: 9 })
-        : new ZipDeflate(filename, { level: 9 });
+    const zippedStream = new ZipDeflate(filename, { level: 9 });
     zippedStream.filename = filename;
     this.zip.add(zippedStream);
     zippedStream.push(strToU8(data), true);
@@ -130,13 +117,13 @@ class Compressor {
   AddToZip(data, filename) {
     if (this.closed) {
       throw new Error(
-        `Cannot add to ${this.filename} as it has been completed. Ensure .Complete() is not called first.`
+        `Cannot add to ${this.filename} as it has been completed. Ensure .Complete() is not called first.`,
       );
     }
 
-    if (typeof data.toObject === 'function') {
+    if (typeof data.toObject === "function") {
       return this.AddStringToZip(JSON.stringify(data.toObject()), filename);
-    } else if (typeof data.toJSON === 'function') {
+    } else if (typeof data.toJSON === "function") {
       return this.AddStringToZip(JSON.stringify(data.toJSON()), filename);
     }
     this.AddStringToZip(JSON.stringify(data), filename);
@@ -168,38 +155,20 @@ class Compressor {
   async Download() {
     if (!this.closed) {
       throw new Error(
-        `Cannot download ${this.filename} as it has not been completed. Ensure .Complete() is called first.`
+        `Cannot download ${this.filename} as it has not been completed. Ensure .Complete() is called first.`,
       );
     }
 
     const blob = await this.ToBlob();
-    if (typeof window.navigator.msSaveBlob !== 'undefined') {
-      // IE doesn't allow using a blob object directly as link href.
-      // Workaround for "HTML7007: One or more blob URLs were
-      // revoked by closing the blob for which they were created.
-      // These URLs will no longer resolve as the data backing
-      // the URL has been freed."
-      window.navigator.msSaveBlob(blob, this.filename);
-      return;
-    }
-
-    // Create a link pointing to the ObjectURL containing the blob
     const blobURL = URL.createObjectURL(blob);
-    const tempLink = document.createElement('a');
-    tempLink.style.display = 'none';
-    tempLink.setAttribute('href', blobURL);
-    tempLink.setAttribute('download', this.filename);
-    // Safari thinks _blank anchor are pop ups. We only want to set _blank
-    // target if the browser does not support the HTML5 download attribute.
-    // This allows you to download files in desktop safari if pop up blocking
-    // is enabled.
-    if (typeof tempLink.download === 'undefined') {
-      tempLink.setAttribute('target', '_blank');
-    }
+    const tempLink = document.createElement("a");
+    tempLink.style.display = "none";
+    tempLink.setAttribute("href", blobURL);
+    tempLink.setAttribute("download", this.filename);
     tempLink.click();
 
+    // For Firefox it is necessary to delay revoking the ObjectURL.
     setTimeout(() => {
-      // For Firefox it is necessary to delay revoking the ObjectURL
       URL.revokeObjectURL(blobURL);
     }, 200);
   }
@@ -211,7 +180,7 @@ class Compressor {
   async ToBlob() {
     if (!this.closed) {
       throw new Error(
-        `Cannot create a blog of ${this.filename} as it has not been completed. Ensure .Complete() is called first.`
+        `Cannot create a blob of ${this.filename} as it has not been completed. Ensure .Complete() is called first.`,
       );
     }
 
@@ -224,20 +193,57 @@ class Compressor {
    * @type {Set<string>}
    */
   static IncompressibleTypes = new Set([
-    'png',
-    'jpg',
-    'jpeg',
-    'pdf',
-    'heic',
-    'heif',
-    'gif',
-    'webp',
-    'webm',
-    'mp4',
-    'mov',
-    'mp3',
-    'aifc',
+    // Images
+    "png",
+    "jpg",
+    "jpeg",
+    "heic",
+    "heif",
+    "gif",
+    "webp",
+    // Audio / video
+    "webm",
+    "mp4",
+    "m4v",
+    "mkv",
+    "avi",
+    "wmv",
+    "mov",
+    "mp3",
+    "m4a",
+    "aac",
+    "ogg",
+    "opus",
+    "flac",
+    "aifc",
+    // Documents
+    "pdf",
+    // Already-compressed archives
+    "zip",
+    "7z",
+    "rar",
+    "gz",
+    "tgz",
+    "bz2",
+    "xz",
+    "zst",
+    "cbz",
+    "cbr",
+    "epub",
+    "apk",
   ]);
+
+  /**
+   * Whether a file should be stored without compression. Already-compressed
+   * formats gain nothing from deflate, and avoiding compression keeps them off
+   * fflate's async (Web Worker) path, which the page CSP blocks in a content script.
+   * @param {string} filename
+   * @return {boolean}
+   */
+  static shouldStoreUncompressed(filename) {
+    const ext = filename.slice(filename.lastIndexOf(".") + 1).toLowerCase();
+    return Compressor.IncompressibleTypes.has(ext);
+  }
 
   /**
    * Convert a fflate to a ReadableStream
@@ -272,15 +278,20 @@ class Compressor {
     let compressed = 0;
     let uncompressed = 0;
     for (const file of files) {
-      for (const el of file?.zip?.u) {
-        if (typeof el.c === 'number') {
+      for (const el of file?.zip?.u || []) {
+        if (typeof el.c === "number") {
           compressed += el.c;
         }
-        if (typeof el.size === 'number') {
+        if (typeof el.size === "number") {
           uncompressed += el.size;
         }
       }
     }
     return { compressed, uncompressed };
   }
+}
+
+// Exposed for the Node test runner; ignored in the browser where `module` is undefined.
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { Compressor };
 }
