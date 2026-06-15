@@ -4,12 +4,7 @@ const globals = require("globals");
 module.exports = [
   // Vendored third-party libraries are not ours to lint.
   {
-    ignores: [
-      "src/js/bootstrap.bundle.min.js",
-      "src/js/*.min.map",
-      "src/css/**",
-      "src/fflate/**",
-    ],
+    ignores: ["src/js/bootstrap.bundle.min.js", "src/js/*.min.map", "src/css/**", "src/fflate/**"],
   },
   js.configs.recommended,
   {
@@ -45,6 +40,15 @@ module.exports = [
         formatLocalDateTime: "readonly",
         HumanFileSize: "readonly",
         slugify: "readonly",
+      },
+    },
+  },
+  {
+    files: ["src/background.js"],
+    languageOptions: {
+      globals: {
+        ...globals.serviceworker,
+        findOrphanedTabKeys: "readonly",
       },
     },
   },

@@ -206,6 +206,18 @@ function slugify(text) {
     .replace(windowsTrailingRe, "");
 }
 
+/**
+ * Identify stored post-data entries whose owning tab no longer exists. Only
+ * numeric keys are considered so any future non-tab settings keys are left untouched.
+ * @param {string[]} storedKeys - Keys currently present in chrome.storage.local.
+ * @param {Array<number|string>} openTabIds - Ids of currently open tabs.
+ * @return {string[]} Keys safe to remove.
+ */
+function findOrphanedTabKeys(storedKeys, openTabIds) {
+  const open = new Set(openTabIds.map((id) => String(id)));
+  return storedKeys.filter((key) => /^\d+$/.test(key) && !open.has(key));
+}
+
 // Exposed for the Node test runner; ignored in the browser where `module` is undefined.
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
@@ -215,5 +227,6 @@ if (typeof module !== "undefined" && module.exports) {
     formatLocalDateTime,
     HumanFileSize,
     slugify,
+    findOrphanedTabKeys,
   };
 }

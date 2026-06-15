@@ -8,6 +8,7 @@ const {
   formatLocalDateTime,
   HumanFileSize,
   slugify,
+  findOrphanedTabKeys,
 } = require("../src/js/utils.js");
 
 test("slugify lowercases nothing but strips illegal characters and collapses spaces", () => {
@@ -170,4 +171,25 @@ test("makeUniqueFilename falls back to a random suffix without an id", () => {
   const seen = new Set(["photo.jpg"]);
   const result = makeUniqueFilename("photo.jpg", seen);
   assert.match(result, /^photo-\d+\.jpg$/);
+});
+
+test("findOrphanedTabKeys returns keys whose tab is no longer open", () => {
+  assert.deepEqual(findOrphanedTabKeys(["1", "2", "3"], [2]), ["1", "3"]);
+});
+
+test("findOrphanedTabKeys matches numeric tab ids regardless of string/number type", () => {
+  assert.deepEqual(findOrphanedTabKeys(["10", "20", "30"], ["10", 30]), ["20"]);
+});
+
+test("findOrphanedTabKeys keeps every key when all tabs are open", () => {
+  assert.deepEqual(findOrphanedTabKeys(["1", "2"], [1, 2]), []);
+});
+
+test("findOrphanedTabKeys ignores non-tab keys so future settings are never swept", () => {
+  assert.deepEqual(findOrphanedTabKeys(["1", "settings", "2"], [1]), ["2"]);
+});
+
+test("findOrphanedTabKeys tolerates empty inputs", () => {
+  assert.deepEqual(findOrphanedTabKeys([], [1, 2]), []);
+  assert.deepEqual(findOrphanedTabKeys(["1", "2"], []), ["1", "2"]);
 });
