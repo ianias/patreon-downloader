@@ -7,18 +7,34 @@ chrome.runtime.sendMessage({ type: "whoAmI" }).then((tabId) => {
   tab = tabId.tab;
 });
 
-const extractPatreonData = () => {
-  console.log("Patreon Downloader | Attempting to extract Patreon data from page.");
-  const campaignIdRegex = /"https:\/\/www.patreon.com\/api\/campaigns\/(\d+)"/gm;
-  const postIdRegex = /"https:\/\/www.patreon.com\/meta-image\/post\/(\d+)"/gm;
+const MAX_EXTRACT_ATTEMPTS = 15;
+const EXTRACT_RETRY_DELAY_MS = 400;
+
+const extractPatreonData = (attempt = 0) => {
+  console.log(
+    "Patreon Downloader | Attempting to extract Patreon data from page. Attempt",
+    attempt,
+  );
+  // Patreon's newer App Router pages embed these URLs inside a JSON-escaped
+  // JS string (e.g. self.__next_f.push([...])), where every "/" is escaped as
+  // "\/". The optional "\\?" before each slash lets this match both the old
+  // unescaped form and the new escaped form.
+  const campaignIdRegex = /"?https:\\?\/\\?\/www\.patreon\.com\\?\/api\\?\/campaigns\\?\/(\d+)"?/gm;
+  const postIdRegex = /"?https:\\?\/\\?\/www\.patreon\.com\\?\/meta-image\\?\/post\\?\/(\d+)"?/gm;
   const campaignIdMatch = campaignIdRegex.exec(document.documentElement.innerHTML);
   const postIdMatch = postIdRegex.exec(document.documentElement.innerHTML);
 
   function fetchDataFromPage() {
     try {
-      // Content scripts run in an isolated world, so the page's __NEXT_DATA__ global
-      // is unreachable; read the serialized copy from the DOM instead.
-      const data = JSON.parse(document.getElementById("__NEXT_DATA__")?.innerText);
+      // Legacy Next.js Pages Router embedded a JSON blob in a script tag with this
+      // id. Newer Patreon pages use the App Router's streamed RSC payload instead,
+      // so this element usually won't exist any more - this is now a last-resort
+      // fallback rather than the primary path.
+      const el = document.getElementById("__NEXT_DATA__");
+      if (!el) {
+        throw new Error("__NEXT_DATA__ element not present (App Router page).");
+      }
+      const data = JSON.parse(el.innerText);
       console.log("Patreon Downloader | Extracting Patreon data from embedded page data.");
       const detail = data?.props?.pageProps?.bootstrapEnvelope?.pageBootstrap?.post;
       document.dispatchEvent(
@@ -33,6 +49,17 @@ const extractPatreonData = () => {
       console.error("Patreon Downloader | Failed to extract Patreon data from page.", e);
       document.dispatchEvent(new CustomEvent("pd-bootstrap-data", { detail: undefined }));
     }
+  }
+
+  if (!(campaignIdMatch?.length > 1 && postIdMatch?.length > 1) && attempt < MAX_EXTRACT_ATTEMPTS) {
+    // Patreon's App Router streams page data into the DOM asynchronously, so the
+    // campaign/post ID markers may not be present in the HTML yet on the first
+    // pass. Retry for a short window before giving up and falling back.
+    console.log(
+      "Patreon Downloader | Campaign/post ID not found yet, retrying shortly.",
+    );
+    setTimeout(() => extractPatreonData(attempt + 1), EXTRACT_RETRY_DELAY_MS);
+    return;
   }
 
   if (campaignIdMatch?.length > 1 && postIdMatch?.length > 1) {
